@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Sign Language Translator</title>
+  <script src="https://docs.opencv.org/4.5.5/opencv.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+</head>
+<body>
+  <video id="video" width="640" height="480" autoplay></video>
+  <canvas id="canvas" width="640" height="480"></canvas>
+  <script>
+    const indexToLetter = 'ABCDEFGHIKLMNOPQRSTUVWXY'.split('');
+    const mean = 0.485 * 255;
+    const std = 0.229 * 255;
+    let ortSession;
+
+    async function init() {
+      // Load the ONNX model
+      ortSession = await ort.InferenceSession.create('./signlanguage.onnx');
+
+      // Set up video capture
+      const video = document.getElementById('video');
+      const canvas = document.getElementById('canvas');
+      const context = canvas.getContext('2d');
+
+      navigator.mediaDevices.getUserMedia({ video: true })
+        .then(stream => {
+          video.srcObject = stream;
+          video.onloadedmetadata = () => {
+            video.play();
+            requestAnimationFrame(processFrame);
+          };
+        });
+
+      async function processFrame() {
+        context.drawImage(video, 0, 0, canvas.width, canvas.height);
+        let frame = context.getImageData(0, 0, canvas.width, canvas.height);
+
+        // Convert to grayscale
+        let grayFrame = new cv.Mat();
+        let mat = cv.matFromImageData(frame);
+        cv.cvtColor(mat, grayFrame, cv.COLOR_RGBA2GRAY);
+
+        // Center crop and resize
+        let size = Math.min(grayFrame.rows, grayFrame.cols);
+        let x = (grayFrame.cols - size) / 2;
+        let y = (grayFrame.rows - size) / 2;
+        let cropped = grayFrame.roi(new cv.Rect(x, y, size, size));
+        let resized = new cv.Mat();
+        cv.resize(cropped, resized, new cv.Size(28, 28));
+
+        // Preprocess for model
+        let data = Float32Array.from(resized.data).map(value => (value - mean) / std);
+        let tensor = new ort.Tensor('float32', data, [1, 1, 28, 28]);
+
+        // Run the model
+        let results = await ortSession.run({ input: tensor });
+        let index = results.output.data.indexOf(Math.max(...results.output.data));
+        let letter = indexToLetter[index];
+
+        // Draw the result
+        context.putImageData(frame, 0, 0);
+        context.fillStyle = 'green';
+        context.font = '48px sans-serif';
+        context.fillText(letter, 100, 100);
+
+        // Schedule next frame
+        requestAnimationFrame(processFrame);
+
+        // Clean up
+        mat.delete();
+        grayFrame.delete();
+        cropped.delete();
+        resized.delete();
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>
